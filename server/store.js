@@ -5,7 +5,7 @@ const DATA_DIR = path.join(__dirname, '..', 'data');
 const DATA_FILE = path.join(DATA_DIR, 'db.json');
 const TEMP_FILE = path.join(DATA_DIR, 'db.json.tmp');
 
-// 初始数据：当前版本只维护用例集合，示例用例都指向内置示例接口，装上依赖就能直接发送
+// 初始数据：用例集合与响应快照集合都从空开始，示例用例指向内置示例接口，装上依赖就能直接发送
 function seedData() {
   return {
     cases: [
@@ -50,6 +50,7 @@ function seedData() {
         updatedAt: '2026-09-17T02:30:00.000Z',
       },
     ],
+    snapshots: [],
   };
 }
 
@@ -76,11 +77,67 @@ function normalizeCase(item) {
   };
 }
 
-// 整份数据只保证 cases 一定存在且元素结构一致
+function textOrEmpty(value) {
+  return typeof value === 'string' ? value : '';
+}
+
+// 快照里留存的单次响应：成功时记下状态、响应头与响应内容，失败时记下失败原因
+function normalizeResponse(source) {
+  const input = source && typeof source === 'object' ? source : {};
+  const ok = input.ok === true;
+  const response = {
+    ok,
+    internal: input.internal === true,
+    targetUrl: textOrEmpty(input.targetUrl),
+    timeMs: Number.isFinite(Number(input.timeMs)) ? Number(input.timeMs) : 0,
+  };
+  if (ok) {
+    response.status = Number.isInteger(input.status) ? input.status : 0;
+    response.statusText = textOrEmpty(input.statusText);
+    response.size = Number.isFinite(Number(input.size)) ? Number(input.size) : 0;
+    response.truncated = input.truncated === true;
+    response.contentType = textOrEmpty(input.contentType);
+    response.headers = Array.isArray(input.headers)
+      ? input.headers
+          .filter((row) => row && typeof row === 'object')
+          .map((row) => ({ key: textOrEmpty(row.key), value: textOrEmpty(row.value) }))
+      : [];
+    response.body = textOrEmpty(input.body);
+  } else {
+    const failure = input.failure && typeof input.failure === 'object' ? input.failure : {};
+    response.failure = {
+      reason: textOrEmpty(failure.reason),
+      detail: textOrEmpty(failure.detail),
+      code: textOrEmpty(failure.code),
+    };
+  }
+  return response;
+}
+
+// 把单条快照整理成固定结构：名称、留存时刻、来源用例与留存的响应缺一不可
+function normalizeSnapshot(item) {
+  const source = item && typeof item === 'object' ? item : {};
+  const savedAt = typeof source.savedAt === 'string' && source.savedAt ? source.savedAt : new Date().toISOString();
+  return {
+    id: typeof source.id === 'string' ? source.id : '',
+    name: typeof source.name === 'string' ? source.name : '',
+    savedAt,
+    sourceCaseId: typeof source.sourceCaseId === 'string' ? source.sourceCaseId : '',
+    sourceCaseName: typeof source.sourceCaseName === 'string' ? source.sourceCaseName : '',
+    sourceMethod: typeof source.sourceMethod === 'string' ? source.sourceMethod : '',
+    sourceUrl: typeof source.sourceUrl === 'string' ? source.sourceUrl : '',
+    response: normalizeResponse(source.response),
+  };
+}
+
+// 整份数据保证 cases 与 snapshots 都存在且元素结构一致
 function normalize(raw) {
   const source = raw && typeof raw === 'object' ? raw : {};
   const cases = Array.isArray(source.cases) ? source.cases.map(normalizeCase).filter((item) => item.id) : [];
-  return { ...source, cases };
+  const snapshots = Array.isArray(source.snapshots)
+    ? source.snapshots.map(normalizeSnapshot).filter((item) => item.id)
+    : [];
+  return { ...source, cases, snapshots };
 }
 
 // 读取数据文件：文件缺失或内容损坏时回落到初始数据并立刻补写
@@ -103,4 +160,4 @@ function save(data) {
   fs.renameSync(TEMP_FILE, DATA_FILE);
 }
 
-module.exports = { load, save, seedData, DATA_FILE };
+module.exports = { load, save, seedData, normalizeSnapshot, DATA_FILE };

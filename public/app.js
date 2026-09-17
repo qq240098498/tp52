@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  // 页面状态：用例列表、内置示例接口、请求头草稿行、最近一次响应结果与结果视图
+  // 页面状态：用例列表、内置示例接口、请求头草稿行、最近一次响应结果与结果视图、快照列表与对比选择
   const state = {
     cases: [],
     selectedId: '',
@@ -10,6 +10,11 @@
     busy: false,
     result: null,
     resultView: 'structured',
+    // 最近一次发送对应的来源用例与请求目标，随快照一起留档
+    resultSource: null,
+    snapshots: [],
+    leftSnapshotId: '',
+    rightSnapshotId: '',
   };
 
   const dom = {
@@ -29,16 +34,30 @@
     resultBody: document.getElementById('result-body'),
     resultSummary: document.getElementById('result-summary'),
     clearResult: document.getElementById('clear-result'),
+    snapshotSave: document.getElementById('snapshot-save'),
+    snapshotName: document.getElementById('field-snapshot-name'),
+    saveSnapshot: document.getElementById('save-snapshot'),
+    snapshotSourceHint: document.getElementById('snapshot-source-hint'),
     caseList: document.getElementById('case-list'),
     caseSummary: document.getElementById('case-summary'),
     refreshCases: document.getElementById('refresh-cases'),
     caseDetail: document.getElementById('case-detail'),
     closeDetail: document.getElementById('close-detail'),
+    snapshotList: document.getElementById('snapshot-list'),
+    snapshotSummary: document.getElementById('snapshot-summary'),
+    refreshSnapshots: document.getElementById('refresh-snapshots'),
+    comparePanel: document.getElementById('compare-panel'),
+    compareMeta: document.getElementById('compare-meta'),
+    compareWarning: document.getElementById('compare-warning'),
+    compareViews: document.getElementById('compare-views'),
+    closeCompare: document.getElementById('close-compare'),
   };
 
   const emptyDetailHint = '在用例列表点「详情」，这里显示该用例保存下来的目标地址、请求头与请求内容。';
   // 结构化视图最多铺开的层级条目数量，避免内容过大时页面卡顿
   const TREE_LIMIT = 800;
+  // 对比视图最多渲染的对齐行数，超过的部分提示去看原始内容
+  const COMPARE_ROW_LIMIT = 2000;
   let noticeTimer = 0;
 
   // ---------------- 后端交互 ----------------
@@ -85,8 +104,11 @@
     dom.saveCase.disabled = busy;
     dom.resetDraft.disabled = busy;
     dom.refreshCases.disabled = busy;
+    dom.saveSnapshot.disabled = busy;
+    dom.refreshSnapshots.disabled = busy;
     dom.sendRequest.textContent = busy && activeAction === 'send' ? '发送中…' : '发送请求';
     dom.saveCase.textContent = busy && activeAction === 'save' ? '正在保存…' : '保存为用例';
+    dom.saveSnapshot.textContent = busy && activeAction === 'snapshot' ? '正在留存…' : '存为快照';
   }
 
   // ---------------- 页面消息与出错标记 ----------------
@@ -107,14 +129,14 @@
       node.hidden = true;
       node.textContent = '';
     });
-    [dom.name, dom.url, dom.body, dom.headerRows].forEach((node) => node.classList.remove('invalid'));
+    [dom.name, dom.url, dom.body, dom.headerRows, dom.snapshotName].forEach((node) => node.classList.remove('invalid'));
   }
 
   // 服务端给出的位置可能是 headers.2.key 这种形式，标记时按区块归位
   function normalizeField(field) {
     if (typeof field !== 'string' || !field) return '';
     const key = field.split('.')[0];
-    return ['name', 'method', 'url', 'headers', 'body'].includes(key) ? key : '';
+    return ['name', 'method', 'url', 'headers', 'body', 'snapshotName'].includes(key) ? key : '';
   }
 
   function showFieldError(field, message) {
@@ -131,6 +153,7 @@
       url: dom.url,
       headers: dom.headerRows,
       body: dom.body,
+      snapshotName: dom.snapshotName,
     }[key];
     if (target) target.classList.add('invalid');
   }
@@ -300,7 +323,16 @@
     try {
       const result = await request('/api/send', { method: 'POST', body: draft });
       state.result = result;
+      // 记录这次响应的来源：回填了哪个用例、用什么请求方式与地址发出去的
+      const sourceCase = state.cases.find((item) => item.id === state.selectedId);
+      state.resultSource = {
+        caseId: sourceCase ? sourceCase.id : '',
+        caseName: sourceCase ? sourceCase.name : '',
+        method: draft.method,
+        url: draft.url,
+      };
       renderResult(result);
+      prepareSnapshotBox(sourceCase);
       if (result.ok) {
         showNotice(`请求已完成：状态码 ${result.status}，耗时 ${formatDuration(result.timeMs)}`, 'success');
       } else {
@@ -308,10 +340,12 @@
       }
     } catch (err) {
       state.result = null;
+      state.resultSource = null;
       if (err.field) showFieldError(err.field, err.message);
       dom.resultSummary.textContent = '';
       dom.resultBody.textContent = '';
       dom.clearResult.hidden = false;
+      dom.snapshotSave.hidden = true;
       dom.resultBody.appendChild(buildFailurePanel('这次请求没有发出去', err.message, ''));
       showNotice(err.message, 'error');
     } finally {
@@ -322,6 +356,7 @@
   function renderResultPending(draft) {
     dom.resultSummary.textContent = '正在等待响应';
     dom.clearResult.hidden = true;
+    dom.snapshotSave.hidden = true;
     dom.resultBody.textContent = '';
 
     const block = document.createElement('div');
@@ -339,6 +374,7 @@
   function renderEmptyResult() {
     dom.resultSummary.textContent = '';
     dom.clearResult.hidden = true;
+    dom.snapshotSave.hidden = true;
     dom.resultBody.textContent = '';
     dom.resultBody.appendChild(
       buildEmptyBlock(
@@ -362,10 +398,13 @@
       // 状态码落在 400 及以上时，页面同样按失败口径提醒
       if (result.status >= 400) head.appendChild(buildChip('本次响应为失败状态', 'chip-bad'));
       dom.resultSummary.textContent = `最近一次：${result.status} ${result.statusText}`.trim();
+      // 收到完整响应才允许留存，网络层失败的结果不留快照
+      dom.snapshotSave.hidden = false;
     } else {
       head.appendChild(buildStatusBadge(0, '未完成'));
       head.appendChild(buildChip(`已等待 ${formatDuration(result.timeMs)}`));
       dom.resultSummary.textContent = '最近一次：请求未完成';
+      dom.snapshotSave.hidden = true;
     }
     dom.resultBody.appendChild(head);
 
@@ -394,6 +433,20 @@
     const bodySection = buildSection('响应内容');
     bodySection.appendChild(buildBodyView(result));
     dom.resultBody.appendChild(bodySection);
+  }
+
+  // 每次收到新响应后布置留存入口：默认带上来源用例名，手工发送则留空由用户填写
+  function prepareSnapshotBox(sourceCase) {
+    const slot = document.querySelector('[data-error="snapshotName"]');
+    if (slot) {
+      slot.hidden = true;
+      slot.textContent = '';
+    }
+    dom.snapshotName.classList.remove('invalid');
+    dom.snapshotName.value = sourceCase ? sourceCase.name : '';
+    dom.snapshotSourceHint.textContent = sourceCase
+      ? `来源用例：${sourceCase.name}`
+      : '本次为手工发送，未关联用例';
   }
 
   function buildFailurePanel(title, reason, detail) {
@@ -553,6 +606,609 @@
     if (typeof value === 'number') return 'number';
     if (typeof value === 'boolean') return 'boolean';
     return 'string';
+  }
+
+  // ---------------- 响应留存 ----------------
+
+  async function saveSnapshot() {
+    if (state.busy) return;
+    if (!state.result || !state.result.ok) {
+      showNotice('请先成功发送一次请求，再把响应留存为快照', 'error');
+      return;
+    }
+
+    const snapshotName = dom.snapshotName.value.trim();
+    if (!snapshotName) {
+      showFieldError('snapshotName', '请填写快照名称，名称为空时不能留存');
+      showNotice('快照名称为空，已拒绝留存', 'error');
+      dom.snapshotName.focus();
+      return;
+    }
+
+    const source = state.resultSource || { caseId: '', caseName: '', method: '', url: '' };
+    setBusy(true, 'snapshot');
+    try {
+      const created = await request('/api/snapshots', {
+        method: 'POST',
+        body: {
+          name: snapshotName,
+          sourceCaseId: source.caseId,
+          sourceCaseName: source.caseName,
+          sourceMethod: source.method,
+          sourceUrl: source.url,
+          response: state.result,
+        },
+      });
+      dom.snapshotName.value = '';
+      await loadSnapshots();
+      // 新留存的快照默认放在左侧，方便立刻选另一份做对比
+      state.leftSnapshotId = created.id;
+      state.rightSnapshotId = '';
+      renderSnapshots();
+      showNotice(`响应已留存为快照「${created.name}」，可在快照对比区再选一份进行对比`, 'success');
+    } catch (err) {
+      if (err.field) showFieldError(err.field, err.message);
+      showNotice(err.message, 'error');
+      if (err.field === 'snapshotName') dom.snapshotName.focus();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // ---------------- 快照列表与删除 ----------------
+
+  async function loadSnapshots() {
+    const list = await request('/api/snapshots');
+    state.snapshots = Array.isArray(list) ? list : [];
+    pruneSnapshotSelection();
+    renderSnapshots();
+  }
+
+  // 被删除的快照不能再参与对比，左右选择槽位遇到缺失立即清空
+  function pruneSnapshotSelection() {
+    if (state.leftSnapshotId && !state.snapshots.some((item) => item.id === state.leftSnapshotId)) {
+      state.leftSnapshotId = '';
+    }
+    if (state.rightSnapshotId && !state.snapshots.some((item) => item.id === state.rightSnapshotId)) {
+      state.rightSnapshotId = '';
+    }
+  }
+
+  function renderSnapshots() {
+    dom.snapshotSummary.textContent = `共 ${state.snapshots.length} 份`;
+    dom.snapshotList.textContent = '';
+
+    if (!state.snapshots.length) {
+      dom.snapshotList.appendChild(
+        buildEmptyBlock('还没有留存过快照', '先发送一次请求，在响应结果下方填好名称点「存为快照」，快照会出现在这里。')
+      );
+      return;
+    }
+    state.snapshots.forEach((item) => {
+      dom.snapshotList.appendChild(buildSnapshotRow(item));
+    });
+  }
+
+  function buildSnapshotRow(item) {
+    const row = document.createElement('article');
+    row.className = 'snapshot-item';
+    if (item.id === state.leftSnapshotId || item.id === state.rightSnapshotId) row.classList.add('active');
+
+    const main = document.createElement('div');
+    main.className = 'snapshot-main';
+
+    const title = document.createElement('div');
+    title.className = 'snapshot-title';
+    const nameNode = document.createElement('span');
+    nameNode.className = 'snapshot-name';
+    nameNode.textContent = item.name;
+    title.append(nameNode, buildStatusBadge(item.response.status, item.response.statusText));
+    if (item.sourceCaseName) title.appendChild(buildTag('来源用例', 'inner'));
+
+    const urlNode = document.createElement('p');
+    urlNode.className = 'snapshot-url';
+    urlNode.textContent = item.sourceUrl || item.response.targetUrl;
+
+    const metaNode = document.createElement('p');
+    metaNode.className = 'snapshot-meta';
+    const sourceText = item.sourceCaseName
+      ? `来源用例：${item.sourceCaseName}`
+      : '来源：手工发送（未关联用例）';
+    metaNode.textContent = `留存于 ${formatTime(item.savedAt)} · ${sourceText}`;
+
+    main.append(title, urlNode, metaNode);
+
+    const actions = document.createElement('div');
+    actions.className = 'snapshot-actions';
+
+    const leftButton = document.createElement('button');
+    leftButton.type = 'button';
+    leftButton.className = item.id === state.leftSnapshotId
+      ? 'btn btn-small btn-pick active'
+      : 'btn btn-small btn-pick';
+    leftButton.textContent = item.id === state.leftSnapshotId ? '✓ 左侧' : '作为左侧';
+    leftButton.dataset.action = 'pick-left';
+    leftButton.dataset.id = item.id;
+
+    const rightButton = document.createElement('button');
+    rightButton.type = 'button';
+    rightButton.className = item.id === state.rightSnapshotId
+      ? 'btn btn-small btn-pick active'
+      : 'btn btn-small btn-pick';
+    rightButton.textContent = item.id === state.rightSnapshotId ? '✓ 右侧' : '作为右侧';
+    rightButton.dataset.action = 'pick-right';
+    rightButton.dataset.id = item.id;
+
+    const deleteButton = document.createElement('button');
+    deleteButton.type = 'button';
+    deleteButton.className = 'btn btn-small btn-danger';
+    deleteButton.textContent = '删除';
+    deleteButton.dataset.action = 'delete-snapshot';
+    deleteButton.dataset.id = item.id;
+
+    actions.append(leftButton, rightButton, deleteButton);
+    row.append(main, actions);
+    return row;
+  }
+
+  function pickSnapshot(id, side) {
+    const current = side === 'left' ? state.leftSnapshotId : state.rightSnapshotId;
+    const oppositeSide = side === 'left' ? 'right' : 'left';
+    const opposite = oppositeSide === 'left' ? state.leftSnapshotId : state.rightSnapshotId;
+
+    // 再点一次同一个槽位表示取消选择
+    if (current === id) {
+      if (side === 'left') state.leftSnapshotId = '';
+      else state.rightSnapshotId = '';
+      hideComparePanel();
+      renderSnapshots();
+      return;
+    }
+    // 同一份快照不能同时占左右两边，对比必须是两份不同的快照
+    if (opposite === id) {
+      showNotice('请选择两份不同的快照进行对比', 'error');
+      return;
+    }
+    if (side === 'left') state.leftSnapshotId = id;
+    else state.rightSnapshotId = id;
+
+    renderSnapshots();
+    if (state.leftSnapshotId && state.rightSnapshotId) {
+      openCompare();
+    } else {
+      hideComparePanel();
+      showNotice(side === 'left' ? '已选为左侧快照，再选一份作为右侧' : '已选为右侧快照，再选一份作为左侧', 'info');
+    }
+  }
+
+  async function removeSnapshot(item) {
+    if (state.busy) return;
+    const confirmed = window.confirm(`确认删除快照「${item.name}」？删除后无法恢复，也不能再参与对比。`);
+    if (!confirmed) return;
+
+    setBusy(true, 'snapshot');
+    try {
+      await request(`/api/snapshots/${encodeURIComponent(item.id)}`, { method: 'DELETE' });
+      const involved = item.id === state.leftSnapshotId || item.id === state.rightSnapshotId;
+      if (item.id === state.leftSnapshotId) state.leftSnapshotId = '';
+      if (item.id === state.rightSnapshotId) state.rightSnapshotId = '';
+      await loadSnapshots();
+      if (involved || !state.leftSnapshotId || !state.rightSnapshotId) hideComparePanel();
+      showNotice(`快照「${item.name}」已删除，不再参与对比`, 'success');
+    } catch (err) {
+      showNotice(err.message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // ---------------- 快照逐层对比 ----------------
+
+  function openCompare() {
+    const left = state.snapshots.find((item) => item.id === state.leftSnapshotId);
+    const right = state.snapshots.find((item) => item.id === state.rightSnapshotId);
+    if (!left || !right) {
+      hideComparePanel();
+      return;
+    }
+    renderCompareMeta(left, right);
+    renderCompareBody(left, right);
+    dom.comparePanel.hidden = false;
+    dom.comparePanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function hideComparePanel() {
+    dom.comparePanel.hidden = true;
+    dom.compareMeta.textContent = '';
+    dom.compareWarning.textContent = '';
+    dom.compareWarning.hidden = true;
+    dom.compareViews.textContent = '';
+  }
+
+  function renderCompareMeta(left, right) {
+    dom.compareMeta.textContent = '';
+    const grid = document.createElement('div');
+    grid.className = 'compare-meta-grid';
+    grid.appendChild(buildCompareMetaCard(left, 'compare-side-left'));
+    const spacer = document.createElement('div');
+    spacer.className = 'compare-meta-spacer';
+    grid.appendChild(spacer);
+    grid.appendChild(buildCompareMetaCard(right, 'compare-side-right'));
+    dom.compareMeta.appendChild(grid);
+  }
+
+  function buildCompareMetaCard(snapshot, extraClass) {
+    const card = document.createElement('div');
+    card.className = `compare-meta-card ${extraClass || ''}`;
+
+    const title = document.createElement('div');
+    title.className = 'snapshot-title';
+    const nameNode = document.createElement('span');
+    nameNode.className = 'snapshot-name';
+    nameNode.textContent = snapshot.name;
+    title.append(nameNode, buildStatusBadge(snapshot.response.status, snapshot.response.statusText));
+    card.appendChild(title);
+
+    const lines = [
+      `留存于 ${formatTime(snapshot.savedAt)}`,
+      snapshot.sourceCaseName ? `来源用例：${snapshot.sourceCaseName}` : '来源：手工发送（未关联用例）',
+      `请求方式：${snapshot.sourceMethod || '未知'}`,
+      `目标地址：${snapshot.sourceUrl || snapshot.response.targetUrl}`,
+    ];
+    lines.forEach((text) => {
+      const line = document.createElement('p');
+      line.className = 'compare-meta-line';
+      line.textContent = text;
+      card.appendChild(line);
+    });
+    return card;
+  }
+
+  function bodyKindInfo(snapshot) {
+    const text = typeof snapshot.response.body === 'string' ? snapshot.response.body : '';
+    if (!text.trim()) return { text, parsed: null, empty: true, rootName: '空内容' };
+    const parsed = tryParseJson(text);
+    if (parsed.ok) return { text, parsed, empty: false, rootName: rootTypeName(parsed.value) };
+    return { text, parsed: null, empty: false, rootName: '非 JSON 文本' };
+  }
+
+  function rootTypeName(value) {
+    if (value === null) return 'null';
+    if (Array.isArray(value)) return '数组';
+    if (typeof value === 'object') return '对象';
+    if (typeof value === 'string') return '字符串';
+    if (typeof value === 'number') return '数字';
+    if (typeof value === 'boolean') return '布尔值';
+    return '未知类型';
+  }
+
+  function renderCompareBody(left, right) {
+    dom.compareWarning.textContent = '';
+    dom.compareWarning.hidden = true;
+    dom.compareViews.textContent = '';
+
+    const leftInfo = bodyKindInfo(left);
+    const rightInfo = bodyKindInfo(right);
+    const leftStructured = leftInfo.parsed && leftInfo.parsed.ok;
+    const rightStructured = rightInfo.parsed && rightInfo.parsed.ok;
+    const rootsCompatible = leftStructured
+      && rightStructured
+      && Array.isArray(leftInfo.parsed.value) === Array.isArray(rightInfo.parsed.value)
+      && isSamePrimitiveKind(leftInfo.parsed.value, rightInfo.parsed.value);
+
+    if (!leftStructured || !rightStructured || !rootsCompatible) {
+      // 根层级就无法对齐：明确说明原因，两边各自独立展示，绝不硬拼
+      showCompareWarning(buildIncompatibleReason(leftInfo, rightInfo, !rootsCompatible));
+      dom.compareViews.appendChild(buildIndependentViews(left, leftInfo, right, rightInfo));
+      return;
+    }
+
+    const aligned = alignTrees(leftInfo.parsed.value, rightInfo.parsed.value);
+    if (aligned.stats.incompatible > 0) {
+      showCompareWarning(
+        `两边有 ${aligned.stats.incompatible} 个层级的取值类型不同（例如一边是对象、另一边是普通值），这些层级无法继续逐层对齐，已在对应位置单独标出并各自完整展示。`
+      );
+    }
+    dom.compareViews.appendChild(buildLegend(aligned.stats));
+    dom.compareViews.appendChild(buildAlignedGrid(aligned.rows));
+  }
+
+  // 两边根层级无法对齐时，把不成立的点逐条讲清楚
+  function buildIncompatibleReason(leftInfo, rightInfo, rootMismatch) {
+    if (leftInfo.empty || rightInfo.empty) {
+      const leftPart = leftInfo.empty ? '响应内容为空' : `是结构化数据（根节点为${leftInfo.rootName}）`;
+      const rightPart = rightInfo.empty ? '响应内容为空' : `是结构化数据（根节点为${rightInfo.rootName}）`;
+      return `两边结构差异过大，无法逐层对齐：左侧快照${leftPart}，右侧快照${rightPart}。以下左右各自独立展示，不做拼接。`;
+    }
+    if (!leftInfo.parsed || !rightInfo.parsed) {
+      const leftPart = leftInfo.parsed ? `是结构化数据（根节点为${leftInfo.rootName}）` : '不是 JSON，无法按层级解析';
+      const rightPart = rightInfo.parsed ? `是结构化数据（根节点为${rightInfo.rootName}）` : '不是 JSON，无法按层级解析';
+      return `两边响应内容无法逐层对齐：左侧快照${leftPart}，右侧快照${rightPart}。以下左右各自按原文独立展示，不做拼接。`;
+    }
+    if (rootMismatch) {
+      return `两边结构差异过大，无法逐层对齐：左侧根节点是${leftInfo.rootName}，右侧根节点是${rightInfo.rootName}，根节点类型不同，层级没有办法一一对应。以下左右各自完整展示，不做拼接。`;
+    }
+    return '两边响应内容无法逐层对齐，以下左右各自独立展示。';
+  }
+
+  function isSamePrimitiveKind(a, b) {
+    const ka = a === null ? 'null' : typeof a;
+    const kb = b === null ? 'null' : typeof b;
+    return ka === kb;
+  }
+
+  function showCompareWarning(text) {
+    dom.compareWarning.textContent = text;
+    dom.compareWarning.hidden = false;
+  }
+
+  function buildIndependentViews(left, leftInfo, right, rightInfo) {
+    const grid = document.createElement('div');
+    grid.className = 'compare-grid compare-grid-plain';
+    grid.appendChild(buildIndependentColumn(left, leftInfo));
+    const arrow = document.createElement('div');
+    arrow.className = 'compare-arrow-cell';
+    grid.appendChild(arrow);
+    grid.appendChild(buildIndependentColumn(right, rightInfo));
+    return grid;
+  }
+
+  function buildIndependentColumn(snapshot, info) {
+    const col = document.createElement('div');
+    col.className = 'compare-column';
+    if (info.empty) {
+      col.appendChild(buildTextNote('本次响应没有返回内容'));
+      return col;
+    }
+    if (info.parsed && info.parsed.ok) {
+      col.appendChild(buildJsonTree(info.parsed.value, '响应内容', { left: TREE_LIMIT }));
+    } else {
+      col.appendChild(buildTextNote(`响应内容不是结构化数据（${info.rootName}），按原始文本展示`));
+      col.appendChild(buildPre(info.text));
+    }
+    return col;
+  }
+
+  function buildLegend(stats) {
+    const legend = document.createElement('div');
+    legend.className = 'compare-legend';
+
+    const items = [
+      ['legend-added', '新增'],
+      ['legend-removed', '删除'],
+      ['legend-changed', '取值改动'],
+      ['legend-incompat', '该层级类型不同'],
+    ];
+    items.forEach(([className, text]) => {
+      const chip = document.createElement('span');
+      chip.className = `legend-chip ${className}`;
+      chip.textContent = text;
+      legend.appendChild(chip);
+    });
+
+    const summary = document.createElement('span');
+    summary.className = 'compare-stat';
+    const parts = [];
+    if (stats.added) parts.push(`新增 ${stats.added} 处`);
+    if (stats.removed) parts.push(`删除 ${stats.removed} 处`);
+    if (stats.changed) parts.push(`改动 ${stats.changed} 处`);
+    if (stats.incompatible) parts.push(`${stats.incompatible} 处无法继续对齐`);
+    summary.textContent = parts.length ? `本次对比：${parts.join(' · ')}` : '两边响应内容完全一致';
+    legend.appendChild(summary);
+    return legend;
+  }
+
+  // 把两棵 JSON 树按相同的键与下标对齐，产出逐行的差异清单
+  function alignTrees(leftRoot, rightRoot) {
+    const rows = [];
+    const stats = { added: 0, removed: 0, changed: 0, incompatible: 0 };
+    const ROOT_LABEL = '响应内容';
+
+    function isContainer(value) {
+      return value !== null && typeof value === 'object';
+    }
+
+    function childPath(path, key, isArrayKey) {
+      if (path === ROOT_LABEL) return isArrayKey ? `${ROOT_LABEL}[${key}]` : String(key);
+      return isArrayKey ? `${path}[${key}]` : `${path}.${key}`;
+    }
+
+    // 只有一边存在的子树：整棵标成新增或删除，逐行铺开方便定位层级；统计只算一处
+    function emitOneSide(value, path, depth, side) {
+      const change = side === 'left' ? 'removed' : 'added';
+      if (isContainer(value)) {
+        const isArray = Array.isArray(value);
+        const keys = isArray ? value.map((_, index) => index) : Object.keys(value);
+        rows.push({
+          depth,
+          path,
+          change,
+          left: side === 'left' ? { kind: 'tag', text: `${isArray ? '数组' : '对象'} ${keys.length} 项` } : null,
+          right: side === 'right' ? { kind: 'tag', text: `${isArray ? '数组' : '对象'} ${keys.length} 项` } : null,
+        });
+        keys.forEach((key) => {
+          emitOneSide(value[key], childPath(path, key, isArray), depth + 1, side);
+        });
+        return;
+      }
+      rows.push({
+        depth,
+        path,
+        change,
+        left: side === 'left' ? { kind: 'primitive', value } : null,
+        right: side === 'right' ? { kind: 'primitive', value } : null,
+      });
+    }
+
+    function walk(path, depth, left, right) {
+      const leftContainer = isContainer(left);
+      const rightContainer = isContainer(right);
+
+      if (leftContainer && rightContainer && Array.isArray(left) === Array.isArray(right)) {
+        const isArray = Array.isArray(left);
+        const keys = isArray
+          ? Array.from({ length: Math.max(left.length, right.length) }, (_, index) => index)
+          : unionKeys(Object.keys(left), Object.keys(right));
+
+        const headerIndex = rows.length;
+        rows.push({
+          depth,
+          path,
+          change: 'equal',
+          left: { kind: 'tag', text: `${isArray ? '数组' : '对象'} ${left.length !== undefined ? left.length : Object.keys(left).length} 项` },
+          right: { kind: 'tag', text: `${isArray ? '数组' : '对象'} ${right.length !== undefined ? right.length : Object.keys(right).length} 项` },
+        });
+
+        let hasDiff = false;
+        keys.forEach((key) => {
+          const inLeft = isArray ? key < left.length : Object.prototype.hasOwnProperty.call(left, key);
+          const inRight = isArray ? key < right.length : Object.prototype.hasOwnProperty.call(right, key);
+          if (inLeft && !inRight) {
+            stats.removed += 1;
+            emitOneSide(left[key], childPath(path, key, isArray), depth + 1, 'left');
+            hasDiff = true;
+          } else if (!inLeft && inRight) {
+            stats.added += 1;
+            emitOneSide(right[key], childPath(path, key, isArray), depth + 1, 'right');
+            hasDiff = true;
+          } else {
+            const before = rows.length;
+            walk(childPath(path, key, isArray), depth + 1, left[key], right[key]);
+            if (hasDifferenceSince(before)) hasDiff = true;
+          }
+        });
+        if (hasDiff) rows[headerIndex].change = 'nested';
+        return;
+      }
+
+      if (leftContainer || rightContainer) {
+        // 同一层级两边类型不同（对象/数组 对 普通值，或对象对数组），这一层不再硬拼
+        stats.incompatible += 1;
+        rows.push({
+          depth,
+          path,
+          change: 'incompatible',
+          left: { kind: 'tree', value: left, typeName: rootTypeName(left) },
+          right: { kind: 'tree', value: right, typeName: rootTypeName(right) },
+        });
+        return;
+      }
+
+      const equal = primitiveEquals(left, right);
+      if (!equal) stats.changed += 1;
+      rows.push({
+        depth,
+        path,
+        change: equal ? 'equal' : 'changed',
+        left: { kind: 'primitive', value: left },
+        right: { kind: 'primitive', value: right },
+      });
+    }
+
+    function hasDifferenceSince(index) {
+      for (let i = index; i < rows.length; i += 1) {
+        if (rows[i].change !== 'equal') return true;
+      }
+      return false;
+    }
+
+    walk(ROOT_LABEL, 0, leftRoot, rightRoot);
+    return { rows, stats };
+  }
+
+  function unionKeys(leftKeys, rightKeys) {
+    const keys = leftKeys.slice();
+    rightKeys.forEach((key) => {
+      if (!keys.includes(key)) keys.push(key);
+    });
+    return keys;
+  }
+
+  function primitiveEquals(a, b) {
+    if (a === null || b === null) return a === b;
+    // NaN 视为相等，避免同一个缺值在两边被误报成改动
+    if (typeof a === 'number' && typeof b === 'number' && Number.isNaN(a) && Number.isNaN(b)) return true;
+    return a === b;
+  }
+
+  function buildAlignedGrid(alignedRows) {
+    const grid = document.createElement('div');
+    grid.className = 'compare-grid';
+
+    let rendered = 0;
+    for (const row of alignedRows) {
+      if (rendered >= COMPARE_ROW_LIMIT) {
+        const note = document.createElement('div');
+        note.className = 'compare-limit-note';
+        note.textContent = `差异层级超过 ${COMPARE_ROW_LIMIT} 行，只展示前 ${COMPARE_ROW_LIMIT} 行，其余内容请对照快照的原始文本查看。`;
+        grid.appendChild(note);
+        break;
+      }
+      grid.appendChild(buildAlignedRow(row));
+      rendered += 1;
+    }
+    return grid;
+  }
+
+  function buildAlignedRow(row) {
+    const line = document.createElement('div');
+    line.className = `compare-row compare-row-${row.change}`;
+    line.appendChild(buildCompareCell(row, 'left'));
+    line.appendChild(buildArrowCell(row.change));
+    line.appendChild(buildCompareCell(row, 'right'));
+    return line;
+  }
+
+  function buildCompareCell(row, side) {
+    const cell = document.createElement('div');
+    cell.className = `compare-cell compare-${side} cell-${row.change}`;
+    cell.style.paddingLeft = `${8 + row.depth * 14}px`;
+
+    const descriptor = row[side];
+    if (!descriptor) {
+      const blank = document.createElement('span');
+      blank.className = 'compare-blank';
+      blank.textContent = '—';
+      cell.appendChild(blank);
+      return cell;
+    }
+
+    const pathNode = document.createElement('span');
+    pathNode.className = 'compare-path';
+    pathNode.textContent = row.path;
+
+    if (descriptor.kind === 'primitive') {
+      cell.append(pathNode, buildPrimitiveValue(descriptor.value));
+    } else if (descriptor.kind === 'tag') {
+      cell.append(pathNode, buildJsonTag(descriptor.text));
+    } else {
+      const note = document.createElement('p');
+      note.className = 'compare-cell-note';
+      note.textContent = `该层级为${descriptor.typeName}，与另一边类型不同，下面完整列出本侧内容：`;
+      cell.append(pathNode, note);
+      cell.appendChild(buildJsonTree(descriptor.value, '', { left: TREE_LIMIT }));
+    }
+    return cell;
+  }
+
+  function buildPrimitiveValue(value) {
+    const node = document.createElement('span');
+    node.className = `json-value json-${primitiveKind(value)}`;
+    node.textContent = describePrimitive(value);
+    return node;
+  }
+
+  function buildArrowCell(change) {
+    const cell = document.createElement('div');
+    cell.className = 'compare-arrow-cell';
+    const mark = { added: '+', removed: '−', changed: '→', incompatible: '≠' }[change];
+    if (mark) {
+      const arrow = document.createElement('span');
+      arrow.className = `compare-arrow compare-arrow-${change}`;
+      arrow.textContent = mark;
+      cell.appendChild(arrow);
+    }
+    return cell;
   }
 
   // ---------------- 用例区 ----------------
@@ -756,7 +1412,7 @@
     dom.caseDetail.appendChild(subNode);
   }
 
-  // ---------------- 保存与删除 ----------------
+  // ---------------- 保存与删除用例 ----------------
 
   async function saveCase() {
     if (state.busy) return;
@@ -943,6 +1599,14 @@
 
     dom.sendRequest.addEventListener('click', sendRequest);
     dom.saveCase.addEventListener('click', saveCase);
+    dom.saveSnapshot.addEventListener('click', saveSnapshot);
+
+    // 重新输入快照名称时立即清掉名称项上的报错标记
+    dom.snapshotName.addEventListener('input', () => {
+      const slot = document.querySelector('[data-error="snapshotName"]');
+      if (slot) slot.hidden = true;
+      dom.snapshotName.classList.remove('invalid');
+    });
 
     dom.resetDraft.addEventListener('click', () => {
       if (state.busy) return;
@@ -951,6 +1615,7 @@
 
     dom.clearResult.addEventListener('click', () => {
       state.result = null;
+      state.resultSource = null;
       renderEmptyResult();
       showNotice('结果区已清空', 'info');
     });
@@ -963,6 +1628,35 @@
       } catch (err) {
         showNotice(err.message, 'error');
       }
+    });
+
+    dom.refreshSnapshots.addEventListener('click', async () => {
+      if (state.busy) return;
+      try {
+        await loadSnapshots();
+        if (state.leftSnapshotId && state.rightSnapshotId) openCompare();
+        else hideComparePanel();
+        showNotice('快照列表已刷新', 'info');
+      } catch (err) {
+        showNotice(err.message, 'error');
+      }
+    });
+
+    // 列表按钮统一用 data-action 分发：选择左右侧、删除
+    dom.snapshotList.addEventListener('click', (event) => {
+      const button = event.target.closest('button[data-action]');
+      if (!button) return;
+      const id = button.dataset.id;
+      if (button.dataset.action === 'pick-left') pickSnapshot(id, 'left');
+      else if (button.dataset.action === 'pick-right') pickSnapshot(id, 'right');
+      else if (button.dataset.action === 'delete-snapshot') {
+        const item = state.snapshots.find((snapshot) => snapshot.id === id);
+        if (item) removeSnapshot(item);
+      }
+    });
+
+    dom.closeCompare.addEventListener('click', () => {
+      hideComparePanel();
     });
 
     dom.closeDetail.addEventListener('click', () => {
@@ -978,10 +1672,16 @@
     renderEmptyDetail();
     renderEmptyResult();
     renderCases();
+    renderSnapshots();
     await checkHealth();
     await loadDemos();
     try {
       await loadCases();
+    } catch (err) {
+      showNotice(err.message, 'error');
+    }
+    try {
+      await loadSnapshots();
     } catch (err) {
       showNotice(err.message, 'error');
     }

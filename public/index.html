@@ -95,6 +95,19 @@
           </div>
         </div>
         <div id="result-body"></div>
+
+        <div class="snapshot-save" id="snapshot-save" hidden>
+          <div class="field-head">
+            <label for="field-snapshot-name">响应留存</label>
+            <span class="counter" id="snapshot-source-hint">本次响应未关联用例</span>
+          </div>
+          <div class="snapshot-save-row">
+            <input id="field-snapshot-name" type="text" maxlength="60" autocomplete="off" placeholder="给这次响应快照起个名称" />
+            <button type="button" class="btn btn-primary" id="save-snapshot">存为快照</button>
+          </div>
+          <p class="field-hint">快照会记下名称、留存时刻、来源用例与本次响应的完整内容，之后可在快照对比区选两份逐层对比</p>
+          <p class="field-error" data-error="snapshotName" hidden></p>
+        </div>
       </section>
     </div>
 
@@ -119,8 +132,30 @@
           <p class="empty-sub">在用例列表点「详情」，这里显示该用例保存下来的目标地址、请求头与请求内容。</p>
         </div>
       </section>
+
+      <section class="panel" id="snapshot-panel">
+        <div class="panel-head">
+          <h2>快照对比区</h2>
+          <div class="panel-head-right">
+            <span class="counter" id="snapshot-summary">共 0 份</span>
+            <button type="button" class="btn btn-ghost btn-small" id="refresh-snapshots">刷新列表</button>
+          </div>
+        </div>
+        <p class="snapshot-tip">在响应结果里把一次响应「存为快照」，再从下面选两份快照左右并排对比。</p>
+        <div class="snapshot-list" id="snapshot-list"></div>
+      </section>
     </div>
   </main>
+
+  <section class="panel compare-panel" id="compare-panel" hidden>
+    <div class="panel-head">
+      <h2>快照逐层对比</h2>
+      <button type="button" class="btn btn-ghost btn-small" id="close-compare">收起对比</button>
+    </div>
+    <div class="compare-meta" id="compare-meta"></div>
+    <div class="compare-warning" id="compare-warning" hidden></div>
+    <div class="compare-views" id="compare-views"></div>
+  </section>
 
   <script src="./app.js"></script>
 </body>

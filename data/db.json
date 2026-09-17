@@ -60,5 +60,109 @@
       "createdAt": "2026-09-17T02:30:00.000Z",
       "updatedAt": "2026-09-17T02:30:00.000Z"
     }
+  ],
+  "snapshots": [
+    {
+      "id": "b47fa244-88c1-4fb2-a194-6ce0fb453aa2",
+      "name": "测试",
+      "savedAt": "2026-09-17T12:37:54.035Z",
+      "sourceCaseId": "",
+      "sourceCaseName": "",
+      "sourceMethod": "GET",
+      "sourceUrl": "/demo/echo?from=workbench",
+      "response": {
+        "ok": true,
+        "internal": true,
+        "targetUrl": "http://127.0.0.1:5052/demo/echo?from=workbench",
+        "timeMs": 10,
+        "status": 200,
+        "statusText": "OK",
+        "size": 334,
+        "truncated": false,
+        "contentType": "application/json; charset=utf-8",
+        "headers": [
+          {
+            "key": "connection",
+            "value": "keep-alive"
+          },
+          {
+            "key": "content-length",
+            "value": "334"
+          },
+          {
+            "key": "content-type",
+            "value": "application/json; charset=utf-8"
+          },
+          {
+            "key": "date",
+            "value": "Thu, 17 Sep 2026 12:37:36 GMT"
+          },
+          {
+            "key": "etag",
+            "value": "W/\"14e-YsiG5Bbu9Vez90XluSxbk5U00Fc\""
+          },
+          {
+            "key": "keep-alive",
+            "value": "timeout=5"
+          },
+          {
+            "key": "x-powered-by",
+            "value": "Express"
+          }
+        ],
+        "body": "{\"message\":\"内置回声接口已收到这次请求\",\"request\":{\"method\":\"GET\",\"path\":\"/demo/echo?from=workbench\",\"headers\":[{\"key\":\"accept\",\"value\":\"application/json\"},{\"key\":\"connection\",\"value\":\"keep-alive\"},{\"key\":\"host\",\"value\":\"127.0.0.1:5052\"}],\"query\":{\"from\":\"workbench\"},\"body\":null,\"receivedAt\":\"2026-09-17T12:37:36.296Z\"}}"
+      }
+    },
+    {
+      "id": "befd8d19-3fd2-4cd4-8e8c-b7c9936cae7a",
+      "name": "第一次请求",
+      "savedAt": "2026-09-17T12:38:37.896Z",
+      "sourceCaseId": "",
+      "sourceCaseName": "",
+      "sourceMethod": "GET",
+      "sourceUrl": "/demo/echo?from=workbench",
+      "response": {
+        "ok": true,
+        "internal": true,
+        "targetUrl": "http://127.0.0.1:5052/demo/echo?from=workbench",
+        "timeMs": 2,
+        "status": 200,
+        "statusText": "OK",
+        "size": 334,
+        "truncated": false,
+        "contentType": "application/json; charset=utf-8",
+        "headers": [
+          {
+            "key": "connection",
+            "value": "keep-alive"
+          },
+          {
+            "key": "content-length",
+            "value": "334"
+          },
+          {
+            "key": "content-type",
+            "value": "application/json; charset=utf-8"
+          },
+          {
+            "key": "date",
+            "value": "Thu, 17 Sep 2026 12:38:28 GMT"
+          },
+          {
+            "key": "etag",
+            "value": "W/\"14e-bLOFkvfrJUYyGoPjNFxOskG/pJQ\""
+          },
+          {
+            "key": "keep-alive",
+            "value": "timeout=5"
+          },
+          {
+            "key": "x-powered-by",
+            "value": "Express"
+          }
+        ],
+        "body": "{\"message\":\"内置回声接口已收到这次请求\",\"request\":{\"method\":\"GET\",\"path\":\"/demo/echo?from=workbench\",\"headers\":[{\"key\":\"accept\",\"value\":\"application/json\"},{\"key\":\"connection\",\"value\":\"keep-alive\"},{\"key\":\"host\",\"value\":\"127.0.0.1:5052\"}],\"query\":{\"from\":\"workbench\"},\"body\":null,\"receivedAt\":\"2026-09-17T12:38:28.271Z\"}}"
+      }
+    }
   ]
 }
