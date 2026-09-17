@@ -60,5 +60,60 @@
       "createdAt": "2026-09-17T02:30:00.000Z",
       "updatedAt": "2026-09-17T02:30:00.000Z"
     }
+  ],
+  "snapshots": [
+    {
+      "id": "6af41a12-469f-4cb7-8eb8-4582b7332b0a",
+      "name": "初次测试",
+      "sourceCaseId": "",
+      "sourceCaseName": "",
+      "request": {
+        "method": "GET",
+        "url": "/demo/status?code=500"
+      },
+      "response": {
+        "ok": true,
+        "internal": true,
+        "targetUrl": "http://127.0.0.1:5052/demo/status?code=500",
+        "status": 500,
+        "statusText": "Internal Server Error",
+        "timeMs": 5,
+        "size": 144,
+        "truncated": false,
+        "contentType": "application/json; charset=utf-8",
+        "body": "{\"code\":500,\"message\":\"目标服务内部处理失败\",\"at\":\"2026-09-17T13:17:06.319Z\",\"tip\":\"这是内置报错接口按参数返回的响应\"}",
+        "headers": [
+          {
+            "key": "connection",
+            "value": "keep-alive"
+          },
+          {
+            "key": "content-length",
+            "value": "144"
+          },
+          {
+            "key": "content-type",
+            "value": "application/json; charset=utf-8"
+          },
+          {
+            "key": "date",
+            "value": "Thu, 17 Sep 2026 13:17:06 GMT"
+          },
+          {
+            "key": "etag",
+            "value": "W/\"90-k679Go9BdLYraQ7LRSrRqSfIN1o\""
+          },
+          {
+            "key": "keep-alive",
+            "value": "timeout=5"
+          },
+          {
+            "key": "x-powered-by",
+            "value": "Express"
+          }
+        ]
+      },
+      "savedAt": "2026-09-17T13:17:14.745Z"
+    }
   ]
 }

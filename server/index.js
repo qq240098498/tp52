@@ -63,6 +63,26 @@ app.delete('/api/cases/:id', (req, res) => {
   }
 });
 
+app.get('/api/snapshots', (_req, res) => {
+  res.json(api.listSnapshots());
+});
+
+app.post('/api/snapshots', (req, res) => {
+  try {
+    res.status(201).json(api.createSnapshot(req.body));
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+app.delete('/api/snapshots/:id', (req, res) => {
+  try {
+    res.json(api.deleteSnapshot(req.params.id));
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
 // 内置示例接口，供页面在不填外部地址的情况下试出发送效果
 demos.mount(app);
 

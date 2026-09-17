@@ -50,6 +50,8 @@ function seedData() {
         updatedAt: '2026-09-17T02:30:00.000Z',
       },
     ],
+    // 响应快照集合：保存的是某一次实际响应的状态、响应头与响应内容
+    snapshots: [],
   };
 }
 
@@ -76,11 +78,63 @@ function normalizeCase(item) {
   };
 }
 
-// 整份数据只保证 cases 一定存在且元素结构一致
+// 快照里保存的响应只取结果对象中与响应本身相关的字段，来源请求信息与前端状态不进快照
+function normalizeResponse(source) {
+  const value = source && typeof source === 'object' ? source : {};
+  return {
+    ok: value.ok !== false,
+    internal: value.internal === true,
+    targetUrl: typeof value.targetUrl === 'string' ? value.targetUrl : '',
+    status: Number.isInteger(value.status) ? value.status : 0,
+    statusText: typeof value.statusText === 'string' ? value.statusText : '',
+    timeMs: Number.isFinite(value.timeMs) ? value.timeMs : 0,
+    size: Number.isFinite(value.size) ? value.size : 0,
+    truncated: value.truncated === true,
+    contentType: typeof value.contentType === 'string' ? value.contentType : '',
+    body: typeof value.body === 'string' ? value.body : '',
+    headers: Array.isArray(value.headers)
+      ? value.headers
+          .filter((row) => row && typeof row === 'object')
+          .map((row) => ({
+            key: typeof row.key === 'string' ? row.key : '',
+            value: typeof row.value === 'string' ? row.value : '',
+          }))
+      : [],
+  };
+}
+
+// 把单条快照整理成固定结构：名称、留存时刻、来源用例与留存时的响应
+function normalizeSnapshot(item) {
+  const source = item && typeof item === 'object' ? item : {};
+  const savedAt = typeof source.savedAt === 'string' && source.savedAt ? source.savedAt : new Date().toISOString();
+  return {
+    id: typeof source.id === 'string' ? source.id : '',
+    name: typeof source.name === 'string' ? source.name : '',
+    sourceCaseId: typeof source.sourceCaseId === 'string' ? source.sourceCaseId : '',
+    sourceCaseName: typeof source.sourceCaseName === 'string' ? source.sourceCaseName : '',
+    request: normalizeSourceRequest(source.request),
+    response: normalizeResponse(source.response),
+    savedAt,
+  };
+}
+
+// 留存时的请求信息（方式与目标地址）只用于在对比区说明快照从哪条链路来
+function normalizeSourceRequest(source) {
+  const value = source && typeof source === 'object' ? source : {};
+  return {
+    method: typeof value.method === 'string' && value.method ? value.method.toUpperCase() : '',
+    url: typeof value.url === 'string' ? value.url : '',
+  };
+}
+
+// 整份数据保证 cases 与 snapshots 都存在且元素结构一致
 function normalize(raw) {
   const source = raw && typeof raw === 'object' ? raw : {};
   const cases = Array.isArray(source.cases) ? source.cases.map(normalizeCase).filter((item) => item.id) : [];
-  return { ...source, cases };
+  const snapshots = Array.isArray(source.snapshots)
+    ? source.snapshots.map(normalizeSnapshot).filter((item) => item.id)
+    : [];
+  return { ...source, cases, snapshots };
 }
 
 // 读取数据文件：文件缺失或内容损坏时回落到初始数据并立刻补写

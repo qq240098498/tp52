@@ -95,6 +95,18 @@
           </div>
         </div>
         <div id="result-body"></div>
+
+        <div class="snapshot-save" id="snapshot-save" hidden>
+          <div class="snapshot-save-head">
+            <label for="snapshot-name">把这一次响应留存为快照</label>
+            <span class="counter">快照会记下名称、留存时刻与来源用例，之后可在下方快照对比区与其他快照逐层对比</span>
+          </div>
+          <div class="snapshot-save-row">
+            <input id="snapshot-name" type="text" maxlength="60" autocomplete="off" placeholder="给这次响应起个名字，例如 第二页修复后" />
+            <button type="button" class="btn btn-primary btn-small" id="save-snapshot">留存为快照</button>
+          </div>
+          <p class="field-error" data-error="snapshotName" hidden></p>
+        </div>
       </section>
     </div>
 
@@ -121,6 +133,32 @@
       </section>
     </div>
   </main>
+
+  <section class="panel snapshot-panel" id="snapshot-panel">
+    <div class="panel-head">
+      <h2>快照对比区</h2>
+      <div class="panel-head-right">
+        <span class="counter" id="snapshot-summary">共 0 份</span>
+        <button type="button" class="btn btn-ghost btn-small" id="refresh-snapshots">刷新列表</button>
+      </div>
+    </div>
+
+    <div class="snapshot-picker">
+      <div class="snapshot-slot">
+        <span class="snapshot-slot-label">左侧快照</span>
+        <select id="snapshot-select-left"><option value="">请选择一份快照</option></select>
+      </div>
+      <span class="snapshot-vs">对比</span>
+      <div class="snapshot-slot">
+        <span class="snapshot-slot-label">右侧快照</span>
+        <select id="snapshot-select-right"><option value="">请选择一份快照</option></select>
+      </div>
+    </div>
+
+    <div class="snapshot-list" id="snapshot-list"></div>
+
+    <div id="snapshot-diff"></div>
+  </section>
 
   <script src="./app.js"></script>
 </body>

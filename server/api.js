@@ -8,6 +8,7 @@ const MAX_NAME_LENGTH = 60;
 const MAX_URL_LENGTH = 2048;
 const MAX_BODY_LENGTH = 200 * 1024;
 const MAX_HEADER_COUNT = 30;
+const MAX_SNAPSHOT_COUNT = 200;
 
 // 带错误码与出错位置的业务异常，页面据此把问题标到具体输入项上
 class ApiError extends Error {
@@ -179,6 +180,82 @@ function deleteCase(id) {
   return { id: removed.id, name: removed.name };
 }
 
+// ---------------- 响应快照 ----------------
+
+// 快照名称单独校验：为空当场拒绝，名称不成立时错误位置标到快照名称输入项
+function validateSnapshotName(name, data) {
+  const value = pickText(name);
+  if (!value) throw new ApiError(400, 'SNAPSHOT_NAME_REQUIRED', '快照名称不能为空', 'snapshotName');
+  if (value.length > MAX_NAME_LENGTH) {
+    throw new ApiError(400, 'SNAPSHOT_NAME_TOO_LONG', `快照名称不能超过 ${MAX_NAME_LENGTH} 个字符`, 'snapshotName');
+  }
+  const duplicated = (data.snapshots || []).some((item) => item.name === value);
+  if (duplicated) {
+    throw new ApiError(409, 'SNAPSHOT_NAME_DUPLICATE', `已存在同名快照「${value}」，请换一个名称`, 'snapshotName');
+  }
+  return value;
+}
+
+// 快照必须基于一次真实拿到的响应：至少要带上 ok 标记与目标地址
+function validateSnapshotResponse(response) {
+  if (!response || typeof response !== 'object') {
+    throw new ApiError(400, 'SNAPSHOT_RESPONSE_REQUIRED', '没有可留存的响应，请先发送一次请求', '');
+  }
+  if (typeof response.targetUrl !== 'string' || !response.targetUrl) {
+    throw new ApiError(400, 'SNAPSHOT_RESPONSE_REQUIRED', '这次响应缺少目标地址，无法留存', '');
+  }
+  return response;
+}
+
+function listSnapshots() {
+  const data = load();
+  return data.snapshots
+    .slice()
+    .sort((a, b) => {
+      if (a.savedAt === b.savedAt) return a.id < b.id ? 1 : -1;
+      return a.savedAt < b.savedAt ? 1 : -1;
+    });
+}
+
+function createSnapshot(payload) {
+  const input = payload && typeof payload === 'object' ? payload : {};
+  const data = load();
+  if ((data.snapshots || []).length >= MAX_SNAPSHOT_COUNT) {
+    throw new ApiError(400, 'SNAPSHOT_TOO_MANY', `最多保存 ${MAX_SNAPSHOT_COUNT} 份快照，请先删除不需要的快照`, '');
+  }
+  const name = validateSnapshotName(input.name, data);
+  validateSnapshotResponse(input.response);
+
+  const sourceCaseId = typeof input.sourceCaseId === 'string' ? input.sourceCaseId : '';
+  const sourceCase = sourceCaseId ? data.cases.find((item) => item.id === sourceCaseId) : null;
+  const requestInput = input.request && typeof input.request === 'object' ? input.request : {};
+
+  const created = {
+    id: crypto.randomUUID(),
+    name,
+    sourceCaseId: sourceCase ? sourceCase.id : '',
+    sourceCaseName: sourceCase ? sourceCase.name : '',
+    request: {
+      method: pickText(requestInput.method).toUpperCase(),
+      url: typeof requestInput.url === 'string' ? requestInput.url : '',
+    },
+    response: input.response,
+    savedAt: new Date().toISOString(),
+  };
+  data.snapshots.push(created);
+  save(data);
+  return created;
+}
+
+function deleteSnapshot(id) {
+  const data = load();
+  const index = data.snapshots.findIndex((item) => item.id === id);
+  if (index === -1) throw new ApiError(404, 'SNAPSHOT_NOT_FOUND', '快照不存在或已被删除', '');
+  const [removed] = data.snapshots.splice(index, 1);
+  save(data);
+  return { id: removed.id, name: removed.name };
+}
+
 module.exports = {
   ApiError,
   ALLOWED_METHODS,
@@ -187,4 +264,7 @@ module.exports = {
   getCase,
   createCase,
   deleteCase,
+  listSnapshots,
+  createSnapshot,
+  deleteSnapshot,
 };
